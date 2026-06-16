@@ -196,12 +196,32 @@ sudo bash install.sh role     # تغییر نقش سرور
 | 4 | Chisel | Chisel | Direct | تونل HTTP با رمزنگاری SSH و reconnect خودکار |
 | 5 | Chisel Reverse | Chisel | Reverse | WebSocket + SSH، مناسب IP کثیف ایران |
 | 6 | Chisel Reverse + TLS ★ | Chisel | Reverse | TLS + SNI، حداکثر مخفی‌کاری |
-| 7 | frp Reverse | frp | Reverse | چند پورت، auth با token، بسیار پایدار |
+| 7 | frp Reverse ★ | frp | Reverse | هاب چندسروری: چند خارج → یک ایران، چند پورت، داشبورد وب |
 | 8 | Gost Reverse WSS ★ | Gost | Reverse | relay + WebSocket TLS، ضد DPI قوی |
 
 ★ = پیشنهادشده برای عبور از DPI.
 
 برای توضیح کامل هر روش و سناریوهای پیشنهادی، فایل [GUIDE.md](GUIDE.md) را ببینید.
+
+### 🌐 حالت چندسروری (Multi-Server Hub با frp)
+
+با روش `7) frp Reverse` می‌توانید **چند سرور خارج را به یک سرور ایران** متصل کنید،
+هر کدام روی پورت‌های متفاوت:
+
+```
+        ┌──────── Kharej-A (label: de1)  → Iran:443
+Iran ───┤
+(frp Hub)├──────── Kharej-B (label: fi)   → Iran:8443
+        └──────── Kharej-C (label: nl)   → Iran:9443
+```
+
+- روی **ایران**: یک‌بار هاب frp را بسازید (نقش server). در صورت تمایل **داشبورد وب**
+  را فعال کنید تا همهٔ سرورهای خارجِ متصل را در یک صفحه ببینید.
+- روی هر **خارج**: یک کلاینت با **برچسب (label)** یکتا بسازید و یک یا **چند پورت** را
+  هم‌زمان به هاب ایران expose کنید. همان token هاب را وارد کنید.
+
+هر سرور خارج پروفایل جداگانهٔ خود را دارد (`reverse-frpc-<label>`) و از طریق منوی
+`p` (Manage Profiles) مدیریت می‌شود. جزئیات کامل در [GUIDE.md](GUIDE.md).
 
 ---
 
