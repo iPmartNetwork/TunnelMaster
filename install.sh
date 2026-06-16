@@ -741,81 +741,123 @@ setup_reverse_chisel_tls() {
 # ─── Reverse Tunnel: frp ─────────────────────────────────────
 
 setup_reverse_frp() {
-    header "Reverse Tunnel — frp (Feature-rich)"
-    info "Most stable reverse tunnel. Auth, multi-port, TCP/UDP support."
+    header "Reverse Tunnel — frp (Multi-Server Hub)"
+    info "One Iran hub can accept many Kharej servers, each on different ports."
     echo ""
 
     local role; role=$(role_for reverse)
     announce_role "$([[ "$role" == 1 ]] && echo server || echo client)"
 
     if [[ "$role" == "1" ]]; then
+        # ── Iran: central hub (frps) — accepts all Kharej servers ──
         echo ""
-        local bind_port=$(ask_port "frps bind port: " "7000")
-        read -rp "Authentication token (shared secret): " token
+        info "This is the central hub on Iran. Every Kharej server connects here."
+        local bind_port=$(ask_port "frps bind port (Kharej servers connect here): " "7000")
+        read -rp "Authentication token (shared by all Kharej servers): " token
         [[ -z "$token" ]] && { error "Token cannot be empty."; press_enter; return; }
 
+        local dash_port="" dash_user="" dash_pass="" dash
+        read -rp "Enable web dashboard to monitor all Kharej servers? [y/N]: " dash
+        if [[ "${dash,,}" == "y" ]]; then
+            dash_port=$(ask_port "Dashboard port: " "7500")
+            read -rp "Dashboard username [admin]: " dash_user; dash_user="${dash_user:-admin}"
+            read -rp "Dashboard password: " dash_pass
+            [[ -z "$dash_pass" ]] && { warn "Empty password — dashboard disabled."; dash_port=""; }
+        fi
+
         mkdir -p "$CONFIG_DIR"
-        cat > "${CONFIG_DIR}/frps.toml" <<EOF
-bindPort = ${bind_port}
-auth.method = "token"
-auth.token = "${token}"
-EOF
+        {
+            echo "bindPort = ${bind_port}"
+            echo "auth.method = \"token\""
+            echo "auth.token = \"${token}\""
+            if [[ -n "$dash_port" ]]; then
+                echo ""
+                echo "webServer.addr = \"0.0.0.0\""
+                echo "webServer.port = ${dash_port}"
+                echo "webServer.user = \"${dash_user}\""
+                echo "webServer.password = \"${dash_pass}\""
+            fi
+        } > "${CONFIG_DIR}/frps.toml"
 
         local cmd="$INSTALL_DIR/frps -c ${CONFIG_DIR}/frps.toml"
 
         echo ""
         info "Config: ${CONFIG_DIR}/frps.toml"
-        info "Command: $cmd"
+        [[ -n "$dash_port" ]] && info "Dashboard: http://<IRAN_IP>:${dash_port}  (user: ${dash_user})"
+        info "Give each Kharej server → Iran IP, hub port ${bind_port}, and the token above."
         read -rp "Apply and start? [y/N]: " confirm
         [[ "${confirm,,}" != "y" ]] && { press_enter; return; }
-        register_tunnel "reverse-frps-${bind_port}" "reverse-frp" "frp Server :${bind_port}" "$cmd" \
+        register_tunnel "reverse-frps-${bind_port}" "reverse-frp" "frp Hub :${bind_port}" "$cmd" \
             "ROLE=\"server\"" \
             "BIND_PORT=\"${bind_port}\"" \
             "TOKEN=\"${token}\"" \
+            "DASHBOARD_PORT=\"${dash_port}\"" \
             "FRP_CONFIG=\"${CONFIG_DIR}/frps.toml\""
 
     elif [[ "$role" == "2" ]]; then
+        # ── Kharej: join the hub (frpc) — one or more port mappings ──
         echo ""
-        local iran_ip=$(ask_ip "Iran server IP: ")
+        local iran_ip=$(ask_ip "Iran hub IP: ")
         local iran_port=$(ask_port "frps port on Iran: " "7000")
-        read -rp "Authentication token (same as Iran): " token
+        read -rp "Authentication token (same as Iran hub): " token
         [[ -z "$token" ]] && { error "Token cannot be empty."; press_enter; return; }
-        local remote_port=$(ask_port "Port to expose on Iran (users connect here): " "443")
-        local local_port=$(ask_port "Local port on Kharej: " "2083")
-        read -rp "Protocol (tcp/udp) [tcp]: " proto
-        proto="${proto:-tcp}"
 
+        local label
+        while true; do
+            read -rp "Label for THIS Kharej server (e.g. de1, finland): " label
+            label=$(echo "$label" | tr -cd '[:alnum:]_-')
+            [[ -n "$label" ]] && break
+            error "Label must contain letters/digits/_/- only."
+        done
+
+        local cfg="${CONFIG_DIR}/frpc-${label}.toml"
         mkdir -p "$CONFIG_DIR"
-        cat > "${CONFIG_DIR}/frpc-${remote_port}.toml" <<EOF
-serverAddr = "${iran_ip}"
-serverPort = ${iran_port}
-auth.method = "token"
-auth.token = "${token}"
+        {
+            echo "serverAddr = \"${iran_ip}\""
+            echo "serverPort = ${iran_port}"
+            echo "auth.method = \"token\""
+            echo "auth.token = \"${token}\""
+        } > "$cfg"
 
-[[proxies]]
-name = "tunnel-${remote_port}"
-type = "${proto}"
-localIP = "127.0.0.1"
-localPort = ${local_port}
-remotePort = ${remote_port}
-EOF
+        local mappings="" count=0
+        while true; do
+            echo ""
+            info "Port mapping #$((count+1)) for [${label}]"
+            local remote_port=$(ask_port "  Port to expose on Iran (users connect here): " "443")
+            local local_port=$(ask_port "  Local port on this Kharej: " "2083")
+            local proto
+            read -rp "  Protocol (tcp/udp) [tcp]: " proto; proto="${proto:-tcp}"
+            {
+                echo ""
+                echo "[[proxies]]"
+                echo "name = \"${label}-${remote_port}\""
+                echo "type = \"${proto}\""
+                echo "localIP = \"127.0.0.1\""
+                echo "localPort = ${local_port}"
+                echo "remotePort = ${remote_port}"
+            } >> "$cfg"
+            mappings+="${local_port}->${remote_port}/${proto},"
+            count=$((count+1))
+            local more
+            read -rp "Add another port mapping for this Kharej? [y/N]: " more
+            [[ "${more,,}" != "y" ]] && break
+        done
 
-        local cmd="$INSTALL_DIR/frpc -c ${CONFIG_DIR}/frpc-${remote_port}.toml"
+        local cmd="$INSTALL_DIR/frpc -c ${cfg}"
 
         echo ""
-        info "Config: ${CONFIG_DIR}/frpc-${remote_port}.toml"
-        info "Command: $cmd"
+        info "Config: ${cfg}"
+        info "Mappings (${count}): ${mappings%,}"
         read -rp "Apply and start? [y/N]: " confirm
         [[ "${confirm,,}" != "y" ]] && { press_enter; return; }
-        register_tunnel "reverse-frpc-${remote_port}" "reverse-frp" "frp Client R:${remote_port}->:${local_port}" "$cmd" \
+        register_tunnel "reverse-frpc-${label}" "reverse-frp" "frp Client [${label}] ${count} port(s)" "$cmd" \
             "ROLE=\"client\"" \
+            "LABEL=\"${label}\"" \
             "IRAN_IP=\"${iran_ip}\"" \
             "IRAN_PORT=\"${iran_port}\"" \
-            "REMOTE_PORT=\"${remote_port}\"" \
-            "LOCAL_PORT=\"${local_port}\"" \
-            "PROTOCOL=\"${proto}\"" \
             "TOKEN=\"${token}\"" \
-            "FRP_CONFIG=\"${CONFIG_DIR}/frpc-${remote_port}.toml\""
+            "MAPPINGS=\"${mappings%,}\"" \
+            "FRP_CONFIG=\"${cfg}\""
     else
         warn "Invalid choice."
     fi
@@ -1374,7 +1416,7 @@ main_menu() {
         echo -e " ${BOLD}── Reverse Tunnels (Kharej → Iran) ─────────────${NC}"
         echo -e "  ${CYAN}5)${NC} Chisel Reverse      ${YELLOW}(WebSocket + SSH)${NC}"
         echo -e "  ${CYAN}6)${NC} Chisel Reverse+TLS  ${GREEN}(TLS + SNI, maximum stealth)${NC} ★"
-        echo -e "  ${CYAN}7)${NC} frp Reverse         ${YELLOW}(Multi-port, auth, stable)${NC}"
+        echo -e "  ${CYAN}7)${NC} frp Reverse         ${GREEN}(Multi-server hub, many Kharej → 1 Iran)${NC} ★"
         echo -e "  ${CYAN}8)${NC} Gost Reverse WSS    ${GREEN}(Relay + WSS, Anti-DPI)${NC} ★"
         echo ""
         echo -e " ${BOLD}── System & Management ──────────────────────────${NC}"
