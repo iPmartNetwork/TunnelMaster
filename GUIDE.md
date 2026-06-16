@@ -3,7 +3,7 @@
 این راهنما مفاهیم، روش‌های تونل‌زنی، سناریوهای واقعی و مدیریت پیشرفته را به‌صورت گام‌به‌گام
 توضیح می‌دهد. برای نصب و مرجع سریع، [README.md](README.md) را ببینید.
 
-> مخزن: <https://github.com/iPmartNetwork/TunnelMaster> — برنچ: `master`
+
 
 ---
 
@@ -132,26 +132,73 @@ sudo bash install.sh role
                     https://IRAN:443 R:443:127.0.0.1:2083
 ```
 
-### ۷) frp Reverse
-کامل‌ترین ابزار reverse tunnel. auth با token، چند پورت، پایداری بالا.
-- **مزیت:** پایدار، امکانات زیاد، TCP/UDP
+### ۷) frp Reverse — هاب چندسروری ★
+کامل‌ترین ابزار reverse tunnel. auth با token، چند پورت، پایداری بالا و **پشتیبانی از
+چند سرور خارج روی یک هاب ایران**.
+- **مزیت:** پایدار، چند خارج → یک ایران، چند پورت در هر خارج، داشبورد وب
 - **عیب:** دو باینری جدا (frps/frpc)
 
 ```
-[Iran — frps]:
+[Iran — frps (هاب)]:
   bindPort = 7000
   auth.token = "SECRET"
+  # داشبورد اختیاری:
+  webServer.addr = "0.0.0.0"
+  webServer.port = 7500
+  webServer.user = "admin"
+  webServer.password = "***"
 
-[Kharej — frpc]:
+[Kharej — frpc (با برچسب)]:
   serverAddr = "IRAN_IP"
   serverPort = 7000
   auth.token = "SECRET"
-  [[proxies]]
-  name = "tunnel"
+  [[proxies]]            # می‌تواند چند proxy داشته باشد
+  name = "de1-443"
   type = "tcp"
   localPort = 2083
   remotePort = 443
 ```
+
+#### چند خارج → یک ایران (با پورت‌های متفاوت)
+
+```
+        ┌──────── Kharej-A (de1) → Iran:443
+Iran ───┤
+(frp Hub)├──────── Kharej-B (fi)  → Iran:8443
+        └──────── Kharej-C (nl)  → Iran:9443
+```
+
+**روی سرور ایران (یک‌بار):**
+
+```bash
+sudo bash install.sh
+# نقش: 1) Iran
+# گزینه: 7) frp Reverse  → نقش server (هاب)
+# frps bind port: 7000
+# token: s3cretToken!2026
+# Enable web dashboard? y  → port 7500, user admin, password ***
+```
+حالا داشبورد روی `http://IRAN_IP:7500` همهٔ سرورهای خارجِ متصل را نشان می‌دهد.
+
+**روی هر سرور خارج (مثلاً Kharej-A):**
+
+```bash
+sudo bash install.sh
+# نقش: 2) Kharej
+# گزینه: 7) frp Reverse  → نقش client
+# Iran hub IP: <IP ایران>
+# frps port: 7000
+# token: s3cretToken!2026
+# Label: de1
+# Port mapping #1 → expose 443 ، local 2083 ، tcp
+# Add another port mapping? n   (یا y برای پورت‌های بیشتر همین خارج)
+```
+
+برای Kharej-B و Kharej-C همین کار را با برچسب و پورت‌های متفاوت (`fi`/8443، `nl`/9443)
+تکرار کنید. همه به همان هاب ایران با همان token وصل می‌شوند.
+
+> هر خارج پروفایل جداگانه دارد: `reverse-frpc-de1`، `reverse-frpc-fi` و ... که از منوی
+> `p` (Manage Profiles) قابل مشاهده، ویرایش و حذف هستند.
 
 ### ۸) Gost Reverse (Relay + WSS) ★
 ترکیب relay و WebSocket TLS برای تونل معکوس.
